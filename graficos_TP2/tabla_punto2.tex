@@ -1,0 +1,24 @@
+\begin{table}[!h]
+\centering
+\caption{IRF acumuladas y ERPT incondicional}
+\centering
+\begin{threeparttable}
+\begin{tabular}[t]{cccc}
+\toprule
+$h$ & CIRF TCN & CIRF IPC & ERPT\\
+\midrule
+0 & 1.000 [1.000, 1.000] & 0.001 [-0.005, 0.006] & 0.001 [-0.005, 0.006]\\
+3 & 1.143 [0.933, 1.331] & 0.005 [-0.016, 0.025] & 0.005 [-0.014, 0.023]\\
+6 & 1.146 [0.879, 1.399] & 0.042 [0.009, 0.075] & 0.037 [0.008, 0.070]\\
+12 & 1.097 [0.814, 1.395] & 0.064 [0.020, 0.107] & 0.059 [0.019, 0.106]\\
+18 & 1.071 [0.805, 1.373] & 0.066 [0.021, 0.111] & 0.061 [0.020, 0.110]\\
+\addlinespace
+24 & 1.070 [0.811, 1.364] & 0.065 [0.021, 0.111] & 0.061 [0.020, 0.109]\\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\item \textit{Note: } 
+\item VAR(4) en primeras diferencias de TCN e IPC, orden de Cholesky (TCN, IPC). Shock normalizado a 1% de depreciación en impacto. Intervalos al 95% por bootstrap recursivo con 2000 réplicas. Muestra: 2000m02--2025m12 (N = 311).
+\end{tablenotes}
+\end{threeparttable}
+\end{table}

@@ -1,0 +1,39 @@
+\begin{table}[!h]
+\centering
+\caption{Tests de raíz unitaria}
+\centering
+\begin{threeparttable}
+\begin{tabular}[t]{lccc}
+\toprule
+Serie & N & ADF & KPSS\\
+\midrule
+\addlinespace[0.3em]
+\multicolumn{4}{l}{\textbf{Niveles}}\\
+\hspace{1em}tcn & 312 & -0.91 & 1.381*\\
+\hspace{1em}ipc & 312 & -1.86 & 2.041*\\
+\hspace{1em}ctot & 312 & -2.28 & 1.040*\\
+\hspace{1em}lembi & 295 & -2.37 & 0.808*\\
+\hspace{1em}exp\_inf & 289 & -4.80* & 0.409\\
+\hspace{1em}exp\_cam & 290 & -0.46 & 1.237*\\
+\hspace{1em}mp\_fed & 312 & -9.44* & 0.187\\
+\hspace{1em}oil\_shock & 312 & -12.45* & 0.090\\
+\hspace{1em}ebp & 312 & -4.29* & 0.314\\
+\addlinespace[0.3em]
+\multicolumn{4}{l}{\textbf{Primeras diferencias}}\\
+\hspace{1em}D.tcn & 311 & -10.55* & 0.107\\
+\hspace{1em}D.ipc & 311 & -6.59* & 0.232\\
+\hspace{1em}D.ctot & 311 & -10.08* & 0.065\\
+\hspace{1em}D.lembi & 294 & -10.41* & 0.077\\
+\hspace{1em}D.exp\_inf & 288 & -7.30* & 0.040\\
+\hspace{1em}D.exp\_cam & 289 & -7.94* & 0.244\\
+\hspace{1em}D.mp\_fed & 311 & -10.35* & 0.026\\
+\hspace{1em}D.oil\_shock & 311 & -11.96* & 0.031\\
+\hspace{1em}D.ebp & 311 & -7.70* & 0.029\\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\item \textit{Note: } 
+\item (*) rechazo al 5%. ADF: H0 = raíz unitaria (con drift, rezagos por AIC, máx. 12). KPSS: H0 = estacionariedad (ventana larga).
+\end{tablenotes}
+\end{threeparttable}
+\end{table}
