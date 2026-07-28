@@ -19,7 +19,7 @@ library(kableExtra)
 library(sandwich) 
 library(lmtest)
 library(AER)
-
+library(car)
 base <- read_rds("Base_Unificada.rds") %>%
   mutate(lembi = 100 * log(embi))   # el nivel en pbs está dominado por 2002
 
@@ -619,3 +619,239 @@ comp %>%
            `est_VAR` >= `lo_Local projections` & `est_VAR` <= `hi_Local projections`) %>%
   filter(h %in% c(0, 3, 6, 12, 18, 24)) %>%
   print()
+
+# ============================================================
+# PUNTO 4
+# LP asimétricas según el signo del shock cambiario
+#
+# Especificación:
+#
+#   D_t = 1{u_t > 0}                       (dummy de signo)
+#   u_pos = D_t * u_t                      (dummy x shock)
+#   u_neg = (1 - D_t) * u_t
+#
+#   x_{t+h} - x_{t-1} = a_h + b_h^+ u_pos + b_h^- u_neg
+#                       + g_h(L) Y_{t-1} + w_{t+h}
+#
+# La dummy va INTERACTUADA, no sola: lo que debe cambiar según el
+# signo es la pendiente (el traspaso por punto de shock), no la
+# constante. La especificación es continua en cero y anida la
+# simetría: imponer b^+ = b^- devuelve la ecuación del punto 3.
+#
+# Requiere el punto 3 corrido (D, u, N, p, H, lev_tcn, lev_ipc,
+# controles(), tema_paper, guardar_graf, dir_salida, ALPHA).
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 1) Descripción de los shocks por signo
+# ------------------------------------------------------------
+
+uu <- u[!is.na(u)]
+cat("Shocks:", length(uu),
+    "| positivos:", sum(uu > 0), sprintf("(%.1f%%)", 100 * mean(uu > 0)),
+    "| negativos:", sum(uu < 0), sprintf("(%.1f%%)", 100 * mean(uu < 0)), "\n")
+cat("Media positivos:", round(mean(uu[uu > 0]), 3),
+    "| media negativos:", round(mean(uu[uu < 0]), 3),
+    "| sd:", round(sd(uu), 3), "\n\n")
+
+# ------------------------------------------------------------
+# 2) LP asimétrica
+# ------------------------------------------------------------
+
+lp_signo_h <- function(h) {
+  
+  js <- (p + 1):(N - h)
+  W  <- as.data.frame(controles(js))
+  ct <- names(W)                                  # nombres de los controles
+  
+  dum <- as.numeric(u[js] > 0)                    # D_t
+  
+  dat <- data.frame(
+    y_tcn = lev_tcn[js + 1 + h] - lev_tcn[js],
+    y_ipc = lev_ipc[js + 1 + h] - lev_ipc[js],
+    u_pos = dum * u[js],
+    u_neg = (1 - dum) * u[js],
+    W
+  )
+  
+  rhs <- paste("u_pos + u_neg +", paste(ct, collapse = " + "))
+  
+  # --- IRF por signo, con test de Wald de igualdad
+  #
+  #     En h = 0 la ecuación del TCN tiene ajuste perfecto: por
+  #     Frisch-Waugh-Lovell ambos coeficientes valen exactamente 1 y la
+  #     suma de cuadrados residual es cero. El test de Wald es
+  #     degenerado en ese caso y se devuelve NA.
+  est_signo <- function(dep) {
+    
+    f <- lm(as.formula(paste(dep, "~", rhs)), data = dat)
+    
+    V <- tryCatch(
+      NeweyWest(f, lag = h + 1, prewhite = FALSE),
+      error = function(e) {
+        k <- names(coef(f))
+        matrix(0, length(k), length(k), dimnames = list(k, k))
+      }
+    )
+    
+    pv <- tryCatch({
+      lh <- linearHypothesis(f, "u_pos = u_neg", vcov. = V, test = "Chisq")
+      lh$`Pr(>Chisq)`[2]
+    }, error = function(e) NA_real_)
+    
+    c(bp   = unname(coef(f)["u_pos"]), sep = sqrt(V["u_pos", "u_pos"]),
+      bn   = unname(coef(f)["u_neg"]), sen = sqrt(V["u_neg", "u_neg"]),
+      pval = pv)
+  }
+  
+  r_tcn <- est_signo("y_tcn")
+  r_ipc <- est_signo("y_ipc")
+  
+  # --- ERPT por signo, por variables instrumentales.
+  #
+  #     Para el ERPT+ se instrumenta el cambio del TCN con u_pos,
+  #     INCLUYENDO u_neg como control exógeno. Sin ese control el
+  #     coeficiente de IV deja de coincidir con b^+_ipc / b^+_tcn,
+  #     porque los controles W son compartidos entre ambos signos.
+  #     El bloque de verificación de más abajo lo confirma.
+  erpt_signo <- function(inst, otro) {
+    
+    fml <- as.formula(paste0(
+      "y_ipc ~ y_tcn + ", otro, " + ", paste(ct, collapse = " + "),
+      " | ",  inst,  " + ", otro, " + ", paste(ct, collapse = " + ")
+    ))
+    iv <- ivreg(fml, data = dat)
+    V  <- tryCatch(NeweyWest(iv, lag = h + 1, prewhite = FALSE),
+                   error = function(e) {
+                     k <- names(coef(iv))
+                     matrix(NA_real_, length(k), length(k), dimnames = list(k, k))
+                   })
+    
+    # F de primera etapa del instrumento
+    f1 <- lm(as.formula(paste0("y_tcn ~ ", inst, " + ", otro, " + ",
+                               paste(ct, collapse = " + "))), data = dat)
+    V1 <- tryCatch(NeweyWest(f1, lag = h + 1, prewhite = FALSE),
+                   error = function(e) {
+                     k <- names(coef(f1))
+                     matrix(NA_real_, length(k), length(k), dimnames = list(k, k))
+                   })
+    
+    c(est = unname(coef(iv)["y_tcn"]),
+      se  = sqrt(V["y_tcn", "y_tcn"]),
+      F1  = unname(coef(f1)[inst])^2 / V1[inst, inst])
+  }
+  
+  e_pos <- erpt_signo("u_pos", "u_neg")
+  e_neg <- erpt_signo("u_neg", "u_pos")
+  
+  tibble(
+    h = h, N = length(js),
+    bp_tcn = r_tcn["bp"], sep_tcn = r_tcn["sep"],
+    bn_tcn = r_tcn["bn"], sen_tcn = r_tcn["sen"], p_tcn = r_tcn["pval"],
+    bp_ipc = r_ipc["bp"], sep_ipc = r_ipc["sep"],
+    bn_ipc = r_ipc["bn"], sen_ipc = r_ipc["sen"], p_ipc = r_ipc["pval"],
+    erpt_p = e_pos["est"], se_erpt_p = e_pos["se"], F_p = e_pos["F1"],
+    erpt_n = e_neg["est"], se_erpt_n = e_neg["se"], F_n = e_neg["F1"]
+  )
+}
+
+lp4 <- map_dfr(0:H, lp_signo_h)
+
+# --- Verificación: el IV debe reproducir el cociente exactamente
+cat("\nVerificación IV = cociente:\n")
+lp4 %>%
+  filter(h %in% c(3, 6, 12, 24)) %>%
+  transmute(h,
+            iv_pos = erpt_p, ratio_pos = bp_ipc / bp_tcn,
+            iv_neg = erpt_n, ratio_neg = bn_ipc / bn_tcn) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 5))) %>%
+  print()
+
+cat("\nResultados principales:\n")
+print(lp4 %>% filter(h %in% c(0, 3, 6, 12, 18, 24)) %>%
+        dplyr::select(h, bp_ipc, bn_ipc, p_ipc, erpt_p, erpt_n, F_p, F_n) %>%
+        mutate(across(where(is.numeric), ~ round(.x, 4))))
+
+cat("\nRespuesta del TCN por signo:\n")
+print(lp4 %>% filter(h %in% c(0, 3, 6, 12, 18, 24)) %>%
+        dplyr::select(h, bp_tcn, sep_tcn, bn_tcn, sen_tcn, p_tcn) %>%
+        mutate(across(where(is.numeric), ~ round(.x, 4))))
+
+# ------------------------------------------------------------
+# 3) Gráfico
+# ------------------------------------------------------------
+
+z <- qnorm(1 - ALPHA / 2)
+
+df4 <- bind_rows(
+  lp4 %>% transmute(h, serie = "Respuesta acumulada del TCN", signo = "Depreciación",
+                    est = bp_tcn, lo = bp_tcn - z*sep_tcn, hi = bp_tcn + z*sep_tcn),
+  lp4 %>% transmute(h, serie = "Respuesta acumulada del TCN", signo = "Apreciación",
+                    est = bn_tcn, lo = bn_tcn - z*sen_tcn, hi = bn_tcn + z*sen_tcn),
+  lp4 %>% transmute(h, serie = "Respuesta acumulada del IPC", signo = "Depreciación",
+                    est = bp_ipc, lo = bp_ipc - z*sep_ipc, hi = bp_ipc + z*sep_ipc),
+  lp4 %>% transmute(h, serie = "Respuesta acumulada del IPC", signo = "Apreciación",
+                    est = bn_ipc, lo = bn_ipc - z*sen_ipc, hi = bn_ipc + z*sen_ipc),
+  lp4 %>% transmute(h, serie = "ERPT", signo = "Depreciación",
+                    est = erpt_p, lo = erpt_p - z*se_erpt_p, hi = erpt_p + z*se_erpt_p),
+  lp4 %>% transmute(h, serie = "ERPT", signo = "Apreciación",
+                    est = erpt_n, lo = erpt_n - z*se_erpt_n, hi = erpt_n + z*se_erpt_n)
+) %>%
+  mutate(serie = factor(serie, levels = c("Respuesta acumulada del TCN",
+                                          "Respuesta acumulada del IPC", "ERPT")),
+         signo = factor(signo, levels = c("Depreciación", "Apreciación")))
+
+g4 <- ggplot(df4, aes(h, est, color = signo, fill = signo)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+  geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.15, color = NA) +
+  geom_line(linewidth = 0.9) +
+  facet_wrap(~ serie, scales = "free_y") +
+  scale_x_continuous(breaks = seq(0, H, 6)) +
+  scale_color_manual(values = c("Depreciación" = "firebrick",
+                                "Apreciación"  = "steelblue4")) +
+  scale_fill_manual(values  = c("Depreciación" = "firebrick",
+                                "Apreciación"  = "steelblue")) +
+  labs(x = "Meses desde el shock", y = "Respuesta acumulada (nivel)",
+       color = NULL, fill = NULL) +
+  tema_paper +
+  theme(legend.position = "bottom")
+
+print(g4)
+guardar_graf(g4, "p4_asimetria_signo", width = 11, height = 4.2)
+
+# ------------------------------------------------------------
+# 4) Tabla para el informe
+# ------------------------------------------------------------
+
+
+tabla_p4 <- lp4 %>%
+  filter(h %in% c(0, 3, 6, 12, 18, 24)) %>%
+  transmute(
+    h,
+    ERPT_pos = sprintf("%.3f [%.3f, %.3f]", erpt_p,
+                       erpt_p - z*se_erpt_p, erpt_p + z*se_erpt_p),
+    ERPT_neg = sprintf("%.3f [%.3f, %.3f]", erpt_n,
+                       erpt_n - z*se_erpt_n, erpt_n + z*se_erpt_n),
+    pval = ifelse(is.na(p_ipc), "---", sprintf("%.3f", p_ipc)),
+    Fpos = ifelse(h == 0, "---", sprintf("%.1f", F_p)),
+    Fneg = ifelse(h == 0, "---", sprintf("%.1f", F_n))
+  )
+print(tabla_p4)
+
+tabla_p4 %>%
+  kbl(booktabs = TRUE, format = "latex", align = "cccccc",
+      col.names = c("$h$", "ERPT$^{+}$", "ERPT$^{-}$",
+                    "$p$-valor", "$F^{+}$", "$F^{-}$"),
+      caption = "ERPT según el signo del shock cambiario", escape = FALSE) %>%
+  kable_styling(latex_options = "hold_position") %>%
+  footnote(
+    general = paste0(
+      "Intervalos al ", NIVEL_BANDAS, "\\% con errores de Newey-West y $h+1$ rezagos. ",
+      "El $p$-valor corresponde al test de Wald de igualdad entre los coeficientes de ",
+      "respuesta del IPC ante shocks positivos y negativos. $F^{+}$ y $F^{-}$ son los ",
+      "estadísticos de primera etapa de cada instrumento."
+    ),
+    escape = FALSE, threeparttable = TRUE
+  ) %>%
+  cat(file = file.path(dir_salida, "tabla_punto4.tex"))
