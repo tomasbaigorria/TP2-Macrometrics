@@ -855,3 +855,454 @@ tabla_p4 %>%
     escape = FALSE, threeparttable = TRUE
   ) %>%
   cat(file = file.path(dir_salida, "tabla_punto4.tex"))
+
+# ============================================================
+# PUNTO 5
+# Histograma de los shocks cambiarios estimados en el inciso 3
+# y evaluación de ERPT según el tamaño del shock.
+#
+# ============================================================
+
+# ------------------------------------------------------------
+# 1) Distribución del shock: momentos y clasificación por tamaño
+# ------------------------------------------------------------
+
+# Serie de shocks con su fecha. D[j] = lev[j+1]-lev[j] corresponde al mes
+# base$date_m[j+1], de modo que u (alineado a D) se fecha con date_m[-1].
+
+u_dat <- tibble(date_m = base$date_m[-1], u = u) %>% drop_na(u)
+
+uu <- u_dat$u                            # 307 shocks estructurales cambiarios
+m  <- mean(uu)
+s  <- sd(uu)
+
+# Calculo asimetría y curtosis: te dan una medida de por qué el tamaño de los shocks 
+# puede estar rompiendo la identificación del erpt
+
+sk <- mean((uu - m)^3) / s^3             # asimetría
+ku <- mean((uu - m)^4) / s^4             # curtosis
+
+# "Normal" = dentro de 1 sd ; las colas son los shocks "grandes".
+u_dat <- u_dat %>%
+  mutate(regimen = cut(u, breaks = c(-Inf, -s, s, Inf),
+                       labels = c("Apreciación grande (< -1 sd)",
+                                  "Normal (|u| <= 1 sd)",
+                                  "Depreciación grande (> +1 sd)")))
+
+tabla_regimen <- u_dat %>% count(regimen) %>% mutate(pct = 100 * n / sum(n))
+
+cat(sprintf("\nShocks: %d | media: %.3f | sd: %.3f | asimetría: %.2f | curtosis: %.2f (exceso %.2f)\n",
+            length(uu), m, s, sk, ku, ku - 3))
+cat(sprintf("Mínimo: %.2f (%.2f sd)  Máximo: %.2f (%.2f sd)\n",
+            min(uu), min(uu) / s, max(uu), max(uu) / s))
+print(tabla_regimen)
+
+# Episodios extremos (|u| > 2 sd) para nombrarlos en el texto
+cat("\nEpisodios extremos (|u| > 2 sd):\n")
+u_dat %>% filter(abs(u) > 2 * s) %>% arrange(desc(abs(u))) %>%
+  mutate(u = round(u, 2), en_sd = round(u / s, 2)) %>% print(n = 40)
+
+# --- Tabla de ANEXO: episodios cambiarios extremos (LaTeX) ---
+# Descompone el movimiento total del mes en la parte sorpresiva (el shock)
+# y la parte predecible por la historia del VAR:  Δtcn = û_t + predecible.
+tabla_episodios <- tibble(date_m = base$date_m, d_tcn = c(NA, diff(base$tcn))) %>%
+  inner_join(u_dat, by = "date_m") %>%
+  filter(abs(u) > 2 * s) %>%
+  arrange(desc(abs(u))) %>%
+  transmute(
+    Mes        = format(date_m, "%Y-%m"),
+    u_sd       = sprintf("%+.2f", u / s),
+    shock      = sprintf("%+.1f", u),
+    predecible = sprintf("%+.1f", d_tcn - u),
+    d_tcn_log  = sprintf("%+.1f", d_tcn),
+    deva_pct   = sprintf("%+.1f", (exp(d_tcn / 100) - 1) * 100),
+    tipo       = ifelse(u > 0, "Depreciación", "Apreciación"))
+print(tabla_episodios, n = 40)
+
+tabla_episodios %>%
+  kbl(booktabs = TRUE, format = "latex", align = "lcccccl",
+      col.names = c("Mes", "$\\hat u_t/\\sigma$", "$\\hat u_t$ (log)", "Predecible",
+                    "$\\Delta tcn$ (log)", "Deva. real (\\%)", "Tipo"),
+      caption = "Episodios cambiarios extremos: shocks con $|\\hat u_t| > 2$ desvíos estándar",
+      label = "episodios", escape = FALSE) %>%
+  kable_styling(latex_options = "hold_position", font_size = 8) %>%
+  footnote(
+    general = paste0(
+      "Meses con shock cambiario estructural mayor a 2 desvíos estándar (", sprintf("%.2f", s),
+      " puntos log), ordenados por magnitud. $\\hat u_t$ es la depreciación no anticipada; ",
+      "\\emph{Predecible} $= \\Delta tcn - \\hat u_t$ es la parte explicada por la historia del VAR; ",
+      "ambas en puntos log ($\\times 100$). \"Deva. real\" convierte $\\Delta tcn$ a variación porcentual del mes."
+    ),
+    escape = FALSE, threeparttable = TRUE
+  ) %>%
+  cat(file = file.path(dir_salida, "tabla_anexo_episodios.tex"))
+
+
+# ------------------------------------------------------------
+# 2) Histograma
+# ------------------------------------------------------------
+
+bw <- 1.5   # ancho de bin (sd ~ 4.6 -> ~25 bins); boundary = 0 => borde en cero
+
+g5 <- ggplot(u_dat, aes(u)) +
+  # franjas de cola: territorio de shocks "grandes" (|u| > 1 sd)
+  annotate("rect", xmin = -Inf, xmax = -s, ymin = 0, ymax = Inf,
+           fill = "grey50", alpha = 0.08) +
+  annotate("rect", xmin =  s,   xmax = Inf, ymin = 0, ymax = Inf,
+           fill = "grey50", alpha = 0.08) +
+  geom_histogram(binwidth = bw, boundary = 0,
+                 fill = "steelblue4", color = "white", linewidth = 0.2) +
+  # normal de referencia (misma media y sd), escalada a frecuencias
+  stat_function(fun = function(x) dnorm(x, m, s) * nrow(u_dat) * bw,
+                color = "firebrick", linewidth = 0.8) +
+  geom_rug(sides = "b", alpha = 0.25) +
+  geom_vline(xintercept = 0, color = "grey40", linewidth = 0.4) +
+  geom_vline(xintercept = c(-s, s), linetype = "dashed",
+             color = "grey20", linewidth = 0.5) +
+  geom_vline(xintercept = c(-2 * s, 2 * s), linetype = "dotted",
+             color = "grey50", linewidth = 0.4) +
+  annotate("text", x = c(-s, s), y = Inf, label = c("-1 sd", "+1 sd"),
+           vjust = 1.6, hjust = c(1.15, -0.15), size = 3, color = "grey20") +
+  annotate("text", x = c(-2 * s, 2 * s), y = Inf, label = c("-2 sd", "+2 sd"),
+           vjust = 1.6, hjust = c(1.15, -0.15), size = 3, color = "grey50") +
+  labs(
+    x = "Shock cambiario no anticipado û (puntos log ≈ % de depreciación)",
+    y = "Frecuencia (meses)",
+    subtitle = sprintf("N = %d ; sd = %.2f ; asimetría = %.2f ; curtosis = %.1f (normal = 3)",
+                       nrow(u_dat), s, sk, ku)
+    ) +
+  tema_paper +
+  theme(plot.subtitle = element_text(size = 10, color = "grey30"))
+
+print(g5)
+guardar_graf(g5, "p5_histograma_shocks", width = 8, height = 4.5)
+
+
+# ------------------------------------------------------------
+# 3) ERPT según el TAMAÑO del shock (3 regímenes, umbral ±1 sd)
+#
+#    Se descompone el shock en tres piezas que suman u_t:
+#      u_neg = u * 1{u < -s}   (apreciación grande)
+#      u_nrm = u * 1{|u| <= s} (normal)
+#      u_pos = u * 1{u >  s}   (depreciación grande)
+# ------------------------------------------------------------
+
+# Error estándar HAC (Newey-West, h+1 rezagos) robusto a fallos numéricos
+nwse <- function(m, hh, nm) {
+  V <- tryCatch(NeweyWest(m, lag = hh + 1, prewhite = FALSE), error = function(e) NULL)
+  if (is.null(V) || !(nm %in% rownames(V))) return(NA_real_)
+  sqrt(V[nm, nm])
+}
+
+lp_size_h <- function(h) {
+  js <- (p + 1):(N - h)
+  W  <- as.data.frame(controles(js)); ct <- names(W)
+  ush <- u[js]
+  dat <- data.frame(
+    y_tcn = lev_tcn[js + 1 + h] - lev_tcn[js],
+    y_ipc = lev_ipc[js + 1 + h] - lev_ipc[js],
+    u_neg = ush * (ush < -s),
+    u_nrm = ush * (abs(ush) <= s),
+    u_pos = ush * (ush >  s),
+    W)
+  rhs <- paste("u_neg + u_nrm + u_pos +", paste(ct, collapse = " + "))
+  
+  # IRF por régimen + test de Wald de igualdad de los tres coeficientes
+  est_reg <- function(dep) {
+    f <- lm(as.formula(paste(dep, "~", rhs)), data = dat)
+    V <- tryCatch(NeweyWest(f, lag = h + 1, prewhite = FALSE),
+                  error = function(e) { k <- names(coef(f)); matrix(NA, length(k), length(k), dimnames = list(k, k)) })
+    pv <- tryCatch(linearHypothesis(f, c("u_neg = u_nrm", "u_nrm = u_pos"),
+                                    vcov. = V, test = "Chisq")$`Pr(>Chisq)`[2],
+                   error = function(e) NA_real_)
+    c(bneg = unname(coef(f)["u_neg"]), seneg = unname(sqrt(V["u_neg", "u_neg"])),
+      bnrm = unname(coef(f)["u_nrm"]), senrm = unname(sqrt(V["u_nrm", "u_nrm"])),
+      bpos = unname(coef(f)["u_pos"]), sepos = unname(sqrt(V["u_pos", "u_pos"])), pval = unname(pv))
+  }
+  rt <- est_reg("y_tcn"); ri <- est_reg("y_ipc")
+  
+  # ERPT del régimen: IV con la pieza como instrumento, las otras dos como controles
+  erpt_reg <- function(inst, otras) {
+    fml <- as.formula(paste0("y_ipc ~ y_tcn + ", paste(otras, collapse = " + "), " + ", paste(ct, collapse = " + "),
+                             " | ", inst, " + ", paste(otras, collapse = " + "), " + ", paste(ct, collapse = " + ")))
+    iv <- ivreg(fml, data = dat)
+    f1 <- lm(as.formula(paste0("y_tcn ~ ", inst, " + ", paste(otras, collapse = " + "), " + ", paste(ct, collapse = " + "))), data = dat)
+    V1 <- tryCatch(NeweyWest(f1, lag = h + 1, prewhite = FALSE), error = function(e) NULL)
+    F1 <- if (is.null(V1)) NA_real_ else unname(coef(f1)[inst])^2 / V1[inst, inst]
+    c(est = unname(coef(iv)["y_tcn"]), se = nwse(iv, h, "y_tcn"), F1 = F1)
+  }
+  en <- erpt_reg("u_neg", c("u_nrm", "u_pos"))
+  e0 <- erpt_reg("u_nrm", c("u_neg", "u_pos"))
+  ep <- erpt_reg("u_pos", c("u_neg", "u_nrm"))
+  
+  tibble(h = h, N = length(js),
+         bneg_ipc = ri["bneg"], seneg_ipc = ri["seneg"], bnrm_ipc = ri["bnrm"], senrm_ipc = ri["senrm"],
+         bpos_ipc = ri["bpos"], sepos_ipc = ri["sepos"], p_ipc = ri["pval"],
+         bneg_tcn = rt["bneg"], seneg_tcn = rt["seneg"],
+         bnrm_tcn = rt["bnrm"], senrm_tcn = rt["senrm"],
+         bpos_tcn = rt["bpos"], sepos_tcn = rt["sepos"],
+         erpt_neg = en["est"], se_erpt_neg = en["se"], F_neg = en["F1"],
+         erpt_nrm = e0["est"], se_erpt_nrm = e0["se"], F_nrm = e0["F1"],
+         erpt_pos = ep["est"], se_erpt_pos = ep["se"], F_pos = ep["F1"])
+}
+
+lp5b <- map_dfr(0:H, lp_size_h)
+
+# Verificación: IV = cociente b_ipc/b_tcn por régimen
+cat("\nVerificación IV = cociente (por régimen):\n")
+lp5b %>% filter(h %in% c(3, 6, 12, 24)) %>%
+  transmute(h, iv_pos = erpt_pos, ratio_pos = bpos_ipc / bpos_tcn,
+            iv_nrm = erpt_nrm, ratio_nrm = bnrm_ipc / bnrm_tcn) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 5))) %>% print()
+
+cat("\nERPT por tamaño del shock:\n")
+print(lp5b %>% filter(h %in% c(0, 3, 6, 12, 18, 24)) %>%
+        transmute(h, erpt_neg = round(erpt_neg, 3), erpt_nrm = round(erpt_nrm, 3),
+                  erpt_pos = round(erpt_pos, 3), p_ipc = round(p_ipc, 3),
+                  F_pos = round(F_pos, 1)))
+
+# --- Gráfico: ERPT y respuesta del IPC por régimen ---
+df5b <- bind_rows(
+  lp5b %>% transmute(h, serie = "Respuesta acumulada del TCN", reg = "Apreciación grande (< -1 sd)",  est = bneg_tcn, lo = bneg_tcn - z*seneg_tcn, hi = bneg_tcn + z*seneg_tcn),
+  lp5b %>% transmute(h, serie = "Respuesta acumulada del TCN", reg = "Normal (|u| <= 1 sd)",          est = bnrm_tcn, lo = bnrm_tcn - z*senrm_tcn, hi = bnrm_tcn + z*senrm_tcn),
+  lp5b %>% transmute(h, serie = "Respuesta acumulada del TCN", reg = "Depreciación grande (> +1 sd)", est = bpos_tcn, lo = bpos_tcn - z*sepos_tcn, hi = bpos_tcn + z*sepos_tcn),
+  lp5b %>% transmute(h, serie = "Respuesta acumulada del IPC", reg = "Apreciación grande (< -1 sd)",  est = bneg_ipc, lo = bneg_ipc - z*seneg_ipc, hi = bneg_ipc + z*seneg_ipc),
+  lp5b %>% transmute(h, serie = "Respuesta acumulada del IPC", reg = "Normal (|u| <= 1 sd)",          est = bnrm_ipc, lo = bnrm_ipc - z*senrm_ipc, hi = bnrm_ipc + z*senrm_ipc),
+  lp5b %>% transmute(h, serie = "Respuesta acumulada del IPC", reg = "Depreciación grande (> +1 sd)", est = bpos_ipc, lo = bpos_ipc - z*sepos_ipc, hi = bpos_ipc + z*sepos_ipc),
+  lp5b %>% transmute(h, serie = "ERPT", reg = "Apreciación grande (< -1 sd)",  est = erpt_neg, lo = erpt_neg - z*se_erpt_neg, hi = erpt_neg + z*se_erpt_neg),
+  lp5b %>% transmute(h, serie = "ERPT", reg = "Normal (|u| <= 1 sd)",          est = erpt_nrm, lo = erpt_nrm - z*se_erpt_nrm, hi = erpt_nrm + z*se_erpt_nrm),
+  lp5b %>% transmute(h, serie = "ERPT", reg = "Depreciación grande (> +1 sd)", est = erpt_pos, lo = erpt_pos - z*se_erpt_pos, hi = erpt_pos + z*se_erpt_pos)
+) %>% mutate(
+  serie = factor(serie, levels = c("Respuesta acumulada del TCN", "Respuesta acumulada del IPC", "ERPT")),
+  reg   = factor(reg, levels = c("Apreciación grande (< -1 sd)", "Normal (|u| <= 1 sd)", "Depreciación grande (> +1 sd)")))
+
+g5b <- ggplot(df5b, aes(h, est, color = reg, fill = reg)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+  geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.12, color = NA) +
+  geom_line(linewidth = 0.9) +
+  facet_wrap(~ serie, scales = "free_y") + scale_x_continuous(breaks = seq(0, H, 6)) +
+  scale_color_manual(values = c("steelblue4", "grey40", "firebrick")) +
+  scale_fill_manual(values  = c("steelblue4", "grey60", "firebrick")) +
+  labs(x = "Meses desde el shock", y = "Respuesta acumulada (nivel)", color = NULL, fill = NULL) +
+  tema_paper + theme(legend.position = "bottom")
+
+print(g5b)
+guardar_graf(g5b, "p5b_erpt_tamano", width = 11, height = 4.4)
+
+# --- Tabla para el informe ---
+tabla_p5b <- lp5b %>%
+  filter(h %in% c(0, 3, 6, 12, 18, 24)) %>%
+  transmute(
+    h,
+    `ERPT$^{-}$ (apr.)`  = sprintf("%.3f [%.3f, %.3f]", erpt_neg, erpt_neg - z*se_erpt_neg, erpt_neg + z*se_erpt_neg),
+    `ERPT$^{0}$ (norm.)` = sprintf("%.3f [%.3f, %.3f]", erpt_nrm, erpt_nrm - z*se_erpt_nrm, erpt_nrm + z*se_erpt_nrm),
+    `ERPT$^{+}$ (depr.)` = sprintf("%.3f [%.3f, %.3f]", erpt_pos, erpt_pos - z*se_erpt_pos, erpt_pos + z*se_erpt_pos),
+    `$p$-valor` = ifelse(is.na(p_ipc), "---", sprintf("%.3f", p_ipc)),
+    `$F^{-}$`   = ifelse(h == 0, "---", sprintf("%.1f", F_neg)),
+    `$F^{0}$`   = ifelse(h == 0, "---", sprintf("%.1f", F_nrm)),
+    `$F^{+}$`   = ifelse(h == 0, "---", sprintf("%.1f", F_pos))
+  )
+print(tabla_p5b)
+
+tabla_p5b %>%
+  kbl(booktabs = TRUE, format = "latex", align = "cccccccc",
+      col.names = c("$h$", "ERPT$^{-}$ (apr.)", "ERPT$^{0}$ (norm.)", "ERPT$^{+}$ (depr.)",
+                    "$p$-valor", "$F^{-}$", "$F^{0}$", "$F^{+}$"),
+      caption = "ERPT según el tamaño del shock cambiario", escape = FALSE) %>%
+  kable_styling(latex_options = "hold_position", font_size = 8) %>%
+  footnote(
+    general = paste0(
+      "Regímenes definidos por el umbral de $\\pm 1$ desvío estándar del shock. Intervalos al ",
+      NIVEL_BANDAS, "\\% con errores de Newey-West y $h+1$ rezagos. El $p$-valor corresponde al ",
+      "test de Wald de igualdad de los tres coeficientes de respuesta del IPC. $F^{-}$, $F^{0}$ y ",
+      "$F^{+}$ son los estadísticos de primera etapa de los regímenes de apreciación grande, normal ",
+      "y depreciación grande, respectivamente; el umbral convencional para descartar instrumento débil es 10."
+    ),
+    escape = FALSE, threeparttable = TRUE
+  ) %>%
+  cat(file = file.path(dir_salida, "tabla_punto5.tex"))
+
+# ============================================================
+# PUNTO 6
+# ERPT CONDICIONAL — VAR de 7 variables, 6 shocks estructurales
+#
+# Paso 1: VAR sobre (Fed, petróleo, EBP, TI, EMBI, TCN, IPC) con ese
+#         orden como identificación recursiva (Cholesky). Se infieren los
+#         primeros 6 shocks estructurales (se excluye el del IPC).
+# Paso 2: para cada shock, ERPT por LP+IV como en el punto 3.
+#
+# Acá se recuperan los shocks estructurales ortogonalizando. En el p2 no hacía falta
+# porque tenías sólo dos variables
+# ============================================================
+
+# ------------------------------------------------------------
+# 1) Sistema de 7 variables (mezcla niveles/diferencias por orden de int.)
+#    I(0): Fed, petróleo, EBP -> nivel. I(1): TI, EMBI, TCN, IPC -> diff.
+#    La muestra la ata el EMBI (termina 2024m7).
+# ------------------------------------------------------------
+dat7 <- base %>%
+  transmute(date_m,
+            fed = mp_fed, oil = oil_shock, ebp = ebp,
+            dctot = ctot - lag(ctot), dembi = lembi - lag(lembi),
+            dtcn = tcn - lag(tcn), dipc = ipc - lag(ipc)) %>%
+  drop_na()
+
+Y7 <- dat7 %>% dplyr::select(fed, oil, ebp, dctot, dembi, dtcn, dipc) %>% as.matrix()
+
+cat("\nPunto 6 - muestra VAR7:", format(min(dat7$date_m), "%Y-%m"), "a",
+    format(max(dat7$date_m), "%Y-%m"), " N =", nrow(Y7), "\n")
+
+# Selección de rezagos + diagnóstico de residuos
+selv7 <- VARselect(Y7, lag.max = 8, type = "const")
+print(selv7$selection)   # AIC/HQ/BIC -> 1
+for (pp in 1:4) {
+  st <- serial.test(VAR(Y7, p = pp, type = "const"), lags.pt = 18, type = "PT.adjusted")
+  cat("p7 =", pp, " Portmanteau p =", round(st$serial$p.value, 4), "\n")
+}
+
+# Portmanteau (H0: no autocorrelación de residuos) para cada rezago
+pv7 <- sapply(1:8, function(pp)
+  serial.test(VAR(Y7, p = pp, type = "const"), lags.pt = 18, type = "PT.adjusted")$serial$p.value)
+for (pp in 1:8) cat("p7 =", pp, " Portmanteau p =", round(pv7[pp], 4), "\n")
+
+# Los criterios eligen 1, pero con 1 rezago los residuos quedan
+# autocorrelacionados (p < 0.01). Ningún rezago los blanquea del todo
+# (habitual en VAR mensuales de alta dimensión); 2 es el que más reduce
+# la autocorrelación. Para la LP, el VAR es sólo un dispositivo que genera
+# instrumentos, no el objeto de inferencia.
+p7 <- 2L
+
+crit7 <- as.data.frame(t(selv7$criteria))[, c("AIC(n)", "HQ(n)", "SC(n)")]
+fmt_min <- function(x) { s <- sprintf("%.3f", x); s[which.min(x)] <- paste0("\\textbf{", s[which.min(x)], "}"); s }
+tabla_lags7 <- tibble(
+  Rezagos = 1:8,
+  AIC = fmt_min(crit7[["AIC(n)"]]),
+  HQ  = fmt_min(crit7[["HQ(n)"]]),
+  BIC = fmt_min(crit7[["SC(n)"]]),
+  `Portmanteau (18)` = sprintf("%.3f", pv7)
+)
+print(tabla_lags7)
+
+tabla_lags7 %>%
+  kbl(booktabs = TRUE, format = "latex", align = "ccccc",
+      col.names = c("Rezagos", "AIC", "HQ", "BIC", "Portmanteau (18)"),
+      caption = "Selección de rezagos del VAR de 7 variables", label = "varselect7", escape = FALSE) %>%
+  kable_styling(latex_options = "hold_position") %>%
+  footnote(
+    general = paste("Menor valor = rezago óptimo (en negrita). BIC = criterio de Schwarz,",
+                    "HQ = Hannan-Quinn. La última columna reporta el $p$-valor del test de Portmanteau",
+                    "ajustado a 18 rezagos (H0: ausencia de autocorrelación). Los criterios seleccionan",
+                    "un rezago, pero éste deja residuos autocorrelacionados; se adopta $p=2$, la",
+                    "especificación más parsimoniosa que mitiga la autocorrelación."),
+    escape = FALSE, threeparttable = TRUE
+  ) %>%
+  cat(file = file.path(dir_salida, "tabla_varselect_p6.tex"))
+
+var7 <- VAR(Y7, p = p7, type = "const")
+cat("¿raíces del VAR7 < 1?", all(roots(var7) < 1),
+    " | máx:", round(max(roots(var7)), 3), "\n")
+
+# ------------------------------------------------------------
+# 2) Shocks estructurales (Cholesky en el orden dado)
+# ------------------------------------------------------------
+E7   <- resid(var7)
+Sig7 <- cov(E7)
+P7   <- t(chol(Sig7))                        # triangular inferior: Σ = P7 P7'
+U7   <- E7 %*% t(solve(P7))                  # u_t = P7^{-1} e_t (var. unitaria)
+colnames(U7) <- c("fed", "oil", "ebp", "ctot", "embi", "tcn", "ipc")
+cat("cov(U7) ~ I ? diag:", round(diag(cov(U7)), 3),
+    "| máx |fuera diag|:", round(max(abs(cov(U7) - diag(7))), 4), "\n")
+
+shocks7 <- as_tibble(U7) %>% mutate(date_m = dat7$date_m[(p7 + 1):nrow(dat7)])
+shocks7$bi <- match(shocks7$date_m, base$date_m)   # fila en 'base' de cada shock
+
+# Controles del paso 2: rezagos del vector del VAR de 7 variables
+rows7 <- (p7 + 1):nrow(dat7)
+W7 <- do.call(cbind, lapply(1:p7, function(l) Y7[rows7 - l, , drop = FALSE]))
+colnames(W7) <- paste0(rep(colnames(Y7), p7), ".l", rep(1:p7, each = ncol(Y7)))
+
+shock_names <- c("fed", "oil", "ebp", "ctot", "embi", "tcn")
+lab_shock   <- c(fed = "Shock MP Fed", oil = "Shock petróleo", ebp = "EBP",
+                 ctot = "Términos interc.", embi = "EMBI", tcn = "Cambiario (TCN)")
+
+# ------------------------------------------------------------
+# 3) LP+IV del ERPT para cada shock
+#    Instrumento = shock estructural k ; controles = rezagos del VAR7.
+#    El primer estadístico F mide la relevancia: sólo los shocks que
+#    mueven fuerte al TCN identifican bien el ERPT.
+# ------------------------------------------------------------
+lp6_hk <- function(h, k) {
+  bi <- shocks7$bi
+  ok <- (bi + h) <= nrow(base) & (bi - 1) >= 1
+  dd <- data.frame(y_tcn = base$tcn[bi + h] - base$tcn[bi - 1],
+                   y_ipc = base$ipc[bi + h] - base$ipc[bi - 1],
+                   zshk  = shocks7[[k]], W7)[ok, , drop = FALSE]
+  dd  <- dd[complete.cases(dd), ]
+  ctl <- setdiff(names(dd), c("y_tcn", "y_ipc", "zshk"))
+  ft  <- lm(reformulate(c("zshk", ctl), "y_tcn"), data = dd)
+  fp  <- lm(reformulate(c("zshk", ctl), "y_ipc"), data = dd)
+  iv  <- ivreg(as.formula(paste0("y_ipc ~ y_tcn + ", paste(ctl, collapse = " + "),
+                                 " | zshk + ", paste(ctl, collapse = " + "))), data = dd)
+  V1  <- tryCatch(NeweyWest(ft, lag = h + 1, prewhite = FALSE), error = function(e) NULL)
+  F1  <- if (is.null(V1)) NA_real_ else unname(coef(ft)["zshk"])^2 / V1["zshk", "zshk"]
+  tibble(h = h, shock = k, N = nrow(dd),
+         b_tcn = unname(coef(ft)["zshk"]), se_tcn = nwse(ft, h, "zshk"),
+         b_ipc = unname(coef(fp)["zshk"]), se_ipc = nwse(fp, h, "zshk"),
+         erpt  = unname(coef(iv)["y_tcn"]), se_erpt = nwse(iv, h, "y_tcn"), F1 = F1)
+}
+
+lp6 <- map_dfr(shock_names, function(k) map_dfr(0:H, ~ lp6_hk(.x, k)))
+
+cat("\nERPT condicional por shock (h=12) y F de primera etapa:\n")
+print(lp6 %>% filter(h == 12) %>%
+        transmute(shock = lab_shock[shock], erpt = round(erpt, 3),
+                  ic = sprintf("[%.2f, %.2f]", erpt - z*se_erpt, erpt + z*se_erpt),
+                  F1 = round(F1, 1), N))
+
+cat("\nERPT del shock cambiario en el VAR7 (comparar con el punto 3):\n")
+print(lp6 %>% filter(shock == "tcn", h %in% c(0, 3, 6, 12, 18, 24)) %>%
+        transmute(h, erpt = round(erpt, 3), F1 = round(F1, 1)))
+
+# --- Gráfico (escala fija; Fed y petróleo, F≈0, exceden el rango) ---
+df6 <- lp6 %>% transmute(h, shock = factor(lab_shock[shock], levels = lab_shock),
+                         est = erpt, lo = erpt - z*se_erpt, hi = erpt + z*se_erpt)
+g6 <- ggplot(df6, aes(h, est)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+  geom_ribbon(aes(ymin = lo, ymax = hi), fill = "steelblue", alpha = 0.2) +
+  geom_line(color = "steelblue4", linewidth = 0.9) +
+  facet_wrap(~ shock, ncol = 3) + scale_x_continuous(breaks = seq(0, H, 6)) +
+  coord_cartesian(ylim = c(-0.4, 0.55)) +
+  labs(x = "Meses desde el shock", y = "ERPT",
+       title = "ERPT condicional por tipo de shock (VAR de 7 variables)",
+       subtitle = "Escala fija; las bandas de Fed y petróleo (F≈0) exceden el rango graficado") +
+  tema_paper
+
+print(g6)
+guardar_graf(g6, "p6_erpt_condicional", width = 11, height = 6)
+
+# --- Tabla para el informe ---
+tabla_p6 <- lp6 %>%
+  filter(h %in% c(6, 12, 24)) %>%
+  mutate(txt = sprintf("%.3f [%.2f, %.2f]", erpt, erpt - z*se_erpt, erpt + z*se_erpt)) %>%
+  dplyr::select(shock, h, txt) %>%
+  pivot_wider(names_from = h, values_from = txt, names_prefix = "h") %>%
+  left_join(lp6 %>% filter(h == 12) %>% transmute(shock, F12 = sprintf("%.1f", F1)), by = "shock") %>%
+  mutate(shock = lab_shock[shock]) %>%
+  dplyr::select(shock, h6, h12, h24, F12)
+print(tabla_p6)
+
+tabla_p6 %>%
+  kbl(booktabs = TRUE, format = "latex", align = "lcccc",
+      col.names = c("Shock", "$h=6$", "$h=12$", "$h=24$", "$F$ ($h{=}12$)"),
+      caption = "ERPT condicional por tipo de shock estructural", escape = FALSE) %>%
+  kable_styling(latex_options = "hold_position", font_size = 9) %>%
+  footnote(
+    general = paste0(
+      "Cada shock se infiere del VAR de 7 variables (orden Fed, petróleo, EBP, TI, EMBI, TCN, IPC) ",
+      "y se usa como instrumento del cambio acumulado del TCN en la LP. Intervalos al ", NIVEL_BANDAS,
+      "\\% (Newey-West, $h+1$ rezagos). El $F$ de primera etapa mide la relevancia del instrumento: ",
+      "un ERPT es interpretable sólo si el shock mueve significativamente al TCN. Muestra: 2000m2--2024m7."
+    ),
+    escape = FALSE, threeparttable = TRUE
+  ) %>%
+  cat(file = file.path(dir_salida, "tabla_punto6.tex"))

@@ -1,0 +1,25 @@
+\begin{table}[!h]
+\centering
+\caption{ERPT condicional por tipo de shock estructural}
+\centering
+\fontsize{9}{11}\selectfont
+\begin{threeparttable}
+\begin{tabular}[t]{lcccc}
+\toprule
+Shock & $h=6$ & $h=12$ & $h=24$ & $F$ ($h{=}12$)\\
+\midrule
+Shock MP Fed & -0.154 [-1.32, 1.01] & 0.227 [-5.00, 5.46] & 0.676 [-2.02, 3.37] & 0.0\\
+Shock petróleo & -0.065 [-0.33, 0.20] & -0.040 [-0.39, 0.32] & 0.213 [-1.29, 1.72] & 0.6\\
+EBP & -0.011 [-0.08, 0.06] & 0.001 [-0.18, 0.18] & -0.044 [-0.28, 0.19] & 4.6\\
+Términos interc. & -0.029 [-0.10, 0.04] & -0.000 [-0.11, 0.11] & 0.008 [-0.16, 0.18] & 4.4\\
+EMBI & 0.090 [0.02, 0.16] & 0.143 [0.02, 0.26] & 0.201 [0.01, 0.39] & 15.3\\
+\addlinespace
+Cambiario (TCN) & 0.042 [-0.02, 0.11] & 0.098 [-0.05, 0.25] & 0.164 [0.03, 0.30] & 5.2\\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\item \textit{Note: } 
+\item Cada shock se infiere del VAR de 7 variables (orden Fed, petróleo, EBP, TI, EMBI, TCN, IPC) y se usa como instrumento del cambio acumulado del TCN en la LP. Intervalos al 95% (Newey-West, $h+1$ rezagos). El $F$ de primera etapa mide la relevancia del instrumento: un ERPT es interpretable sólo si el shock mueve significativamente al TCN. Muestra: 2000m2--2024m7.
+\end{tablenotes}
+\end{threeparttable}
+\end{table}

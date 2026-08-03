@@ -1,0 +1,26 @@
+\begin{table}[!h]
+\centering
+\caption{\label{tab:varselect7}Selección de rezagos del VAR de 7 variables}
+\centering
+\begin{threeparttable}
+\begin{tabular}[t]{ccccc}
+\toprule
+Rezagos & AIC & HQ & BIC & Portmanteau (18)\\
+\midrule
+1 & \textbf{-2.817} & \textbf{-2.530} & \textbf{-2.101} & 0.009\\
+2 & -2.814 & -2.276 & -1.471 & 0.043\\
+3 & -2.676 & -1.887 & -0.708 & 0.035\\
+4 & -2.571 & -1.531 & 0.024 & 0.015\\
+5 & -2.457 & -1.166 & 0.765 & 0.029\\
+\addlinespace
+6 & -2.351 & -0.808 & 1.497 & 0.012\\
+7 & -2.237 & -0.444 & 2.237 & 0.016\\
+8 & -2.089 & -0.045 & 3.011 & 0.003\\
+\bottomrule
+\end{tabular}
+\begin{tablenotes}
+\item \textit{Note: } 
+\item Menor valor = rezago óptimo (en negrita). BIC = criterio de Schwarz, HQ = Hannan-Quinn. La última columna reporta el $p$-valor del test de Portmanteau ajustado a 18 rezagos (H0: ausencia de autocorrelación). Los criterios seleccionan un rezago, pero éste deja residuos autocorrelacionados; se adopta $p=2$, la especificación más parsimoniosa que mitiga la autocorrelación.
+\end{tablenotes}
+\end{threeparttable}
+\end{table}
