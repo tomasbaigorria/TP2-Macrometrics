@@ -1231,6 +1231,7 @@ lab_shock   <- c(fed = "Shock MP Fed", oil = "Shock petróleo", ebp = "EBP",
 #    El primer estadístico F mide la relevancia: sólo los shocks que
 #    mueven fuerte al TCN identifican bien el ERPT.
 # ------------------------------------------------------------
+
 lp6_hk <- function(h, k) {
   bi <- shocks7$bi
   ok <- (bi + h) <= nrow(base) & (bi - 1) >= 1
@@ -1264,6 +1265,7 @@ print(lp6 %>% filter(shock == "tcn", h %in% c(0, 3, 6, 12, 18, 24)) %>%
         transmute(h, erpt = round(erpt, 3), F1 = round(F1, 1)))
 
 # --- Gráfico (escala fija; Fed y petróleo, F≈0, exceden el rango) ---
+
 df6 <- lp6 %>% transmute(h, shock = factor(lab_shock[shock], levels = lab_shock),
                          est = erpt, lo = erpt - z*se_erpt, hi = erpt + z*se_erpt)
 g6 <- ggplot(df6, aes(h, est)) +
@@ -1306,3 +1308,90 @@ tabla_p6 %>%
     escape = FALSE, threeparttable = TRUE
   ) %>%
   cat(file = file.path(dir_salida, "tabla_punto6.tex"))
+
+# ============================================================
+# PUNTO 7
+# ERPT por SIGNO, para cada uno de los 6 shocks del punto 6
+#
+# Se parte cada shock estructural en su parte positiva y negativa y se
+# estima el ERPT de cada una por IV.
+# ============================================================
+
+lp7_hk <- function(h, k) {
+  bi <- shocks7$bi
+  ok <- (bi + h) <= nrow(base) & (bi - 1) >= 1
+  zk <- shocks7[[k]]
+  dd <- data.frame(y_tcn = base$tcn[bi + h] - base$tcn[bi - 1],
+                   y_ipc = base$ipc[bi + h] - base$ipc[bi - 1],
+                   zpos = zk * (zk > 0), zneg = zk * (zk < 0), W7)[ok, , drop = FALSE]
+  dd  <- dd[complete.cases(dd), ]
+  ctl <- setdiff(names(dd), c("y_tcn", "y_ipc", "zpos", "zneg"))
+  side <- function(inst, other) {
+    iv <- ivreg(as.formula(paste0("y_ipc ~ y_tcn + ", other, " + ", paste(ctl, collapse = " + "),
+                                  " | ", inst, " + ", other, " + ", paste(ctl, collapse = " + "))), data = dd)
+    f1 <- lm(reformulate(c(inst, other, ctl), "y_tcn"), data = dd)
+    V1 <- tryCatch(NeweyWest(f1, lag = h + 1, prewhite = FALSE), error = function(e) NULL)
+    F1 <- if (is.null(V1)) NA_real_ else unname(coef(f1)[inst])^2 / V1[inst, inst]
+    c(est = unname(coef(iv)["y_tcn"]), se = nwse(iv, h, "y_tcn"), F1 = F1)
+  }
+  ep <- side("zpos", "zneg"); en <- side("zneg", "zpos")
+  tibble(h = h, shock = k,
+         erpt_pos = ep["est"], se_pos = ep["se"], F_pos = ep["F1"],
+         erpt_neg = en["est"], se_neg = en["se"], F_neg = en["F1"])
+}
+
+lp7 <- map_dfr(shock_names, function(k) map_dfr(0:H, ~ lp7_hk(.x, k)))
+
+cat("\nERPT por signo del shock (h=12):\n")
+print(lp7 %>% filter(h == 12) %>%
+        transmute(shock = lab_shock[shock],
+                  erpt_pos = round(erpt_pos, 3), F_pos = round(F_pos, 1),
+                  erpt_neg = round(erpt_neg, 3), F_neg = round(F_neg, 1)))
+
+# --- Gráfico (escala fija; sólo el shock cambiario retiene señal) ---
+df7 <- bind_rows(
+  lp7 %>% transmute(h, shock = factor(lab_shock[shock], levels = lab_shock), signo = "Positivo",
+                    est = erpt_pos, lo = erpt_pos - z*se_pos, hi = erpt_pos + z*se_pos),
+  lp7 %>% transmute(h, shock = factor(lab_shock[shock], levels = lab_shock), signo = "Negativo",
+                    est = erpt_neg, lo = erpt_neg - z*se_neg, hi = erpt_neg + z*se_neg))
+g7 <- ggplot(df7, aes(h, est, color = signo, fill = signo)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+  geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.12, color = NA) +
+  geom_line(linewidth = 0.85) +
+  facet_wrap(~ shock, ncol = 3) + scale_x_continuous(breaks = seq(0, H, 6)) +
+  coord_cartesian(ylim = c(-0.75, 1)) +
+  scale_color_manual(values = c("Positivo" = "firebrick", "Negativo" = "steelblue4")) +
+  scale_fill_manual(values  = c("Positivo" = "firebrick", "Negativo" = "steelblue4")) +
+  labs(x = "Meses desde el shock", y = "ERPT", color = NULL, fill = NULL,
+       title = "ERPT por signo del shock, para cada shock estructural",
+       subtitle = "Escala fija; salvo el shock cambiario, la primera etapa débil (F<10) hace estallar las bandas") +
+  tema_paper + theme(legend.position = "bottom")
+
+print(g7)
+guardar_graf(g7, "p7_erpt_signo", width = 11, height = 6)
+
+# --- Tabla para el informe (ERPT por signo a h=12, con F de primera etapa) ---
+tabla_p7 <- lp7 %>%
+  filter(h == 12) %>%
+  transmute(
+    Shock = lab_shock[shock],
+    `ERPT$^{+}$` = sprintf("%.3f", erpt_pos), `$F^{+}$` = sprintf("%.1f", F_pos),
+    `ERPT$^{-}$` = sprintf("%.3f", erpt_neg), `$F^{-}$` = sprintf("%.1f", F_neg)
+  )
+print(tabla_p7)
+
+tabla_p7 %>%
+  kbl(booktabs = TRUE, format = "latex", align = "lcccc",
+      col.names = c("Shock", "ERPT$^{+}$", "$F^{+}$", "ERPT$^{-}$", "$F^{-}$"),
+      caption = "ERPT por signo del shock, para cada shock estructural ($h=12$)", escape = FALSE) %>%
+  kable_styling(latex_options = "hold_position", font_size = 9) %>%
+  footnote(
+    general = paste0(
+      "Cada shock del punto 6 se parte en pieza positiva y negativa; el ERPT de cada signo se estima ",
+      "por IV con esa pieza como instrumento y la otra como control. Los $F$ de primera etapa, casi ",
+      "todos inferiores a 10, muestran que al condicionar por shock y además partir por signo se agota ",
+      "la variación identificante: salvo el shock cambiario propio, los ERPT por signo no están identificados."
+    ),
+    escape = FALSE, threeparttable = TRUE
+  ) %>%
+  cat(file = file.path(dir_salida, "tabla_punto7.tex"))
