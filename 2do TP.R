@@ -1401,3 +1401,396 @@ tabla_p7 %>%
     escape = FALSE, threeparttable = TRUE
   ) %>%
   cat(file = file.path(dir_salida, "tabla_punto7.tex"))
+
+# ============================================================
+# PUNTO 8
+# IRF de EXPECTATIVAS (inflación y TCN a 12 meses)
+#
+# Esquema: mismo shock cambiario û_t del punto 3 (VAR bivariado).
+# Las expectativas NO entran en la inferencia del shock: solo del
+# lado izquierdo de la LP. Se estiman tres objetos por variable:
+#
+#   (i)   IRF de la expectativa:      E_t+h            (nivel; I(0) p/inflación)
+#   (ii)  IRF del realizado 12m fwd:  x_t+h+12 - x_t+h (comparable con la expectativa)
+#   (iii) IRF del gap = (i)-(ii):     coef = test directo de diferencia
+#
+# Requiere el punto 3 corrido: u, N, p, H, base, controles(), nwse, z, ALPHA,
+# lev_tcn, lev_ipc, dir_salida, tema_paper, guardar_graf.
+# ============================================================
+
+# ------------------------------------------------------------
+# 0) Niveles de las variables que van del lado izquierdo
+# ------------------------------------------------------------
+lev_expinf <- base$exp_inf     # E[π] a 12m, en 100*log(1+x/100)
+lev_expcam <- base$exp_cam     # E[tcn] a 12m, en 100*log(nivel esperado)
+# lev_tcn, lev_ipc ya existen del punto 3
+
+H12 <- 12   # ventana de la expectativa: 12 meses fijos
+
+# ------------------------------------------------------------
+# 1) LP genérica para el punto 8
+#
+#    Devuelve, para un horizonte h y un 'tipo', el coeficiente del
+#    shock sobre la dependiente correspondiente. Misma mecánica que
+#    lp_h del punto 3: shock como regresor, rezagos del VAR como
+#    controles, HAC con h+1 rezagos. El tope de js cambia según el
+#    futuro que requiere cada dependiente.
+#
+#    La variable (inflación / tcn) se fija afuera con VAR_LHS.
+# ------------------------------------------------------------
+lp8_h <- function(h, tipo) {
+  # tipo: "exp"  -> expectativa (nivel en t+h)
+  #       "real" -> realizado fwd: x_{t+h+12} - x_{t+h}
+  #       "gap"  -> expectativa - realizado
+  
+  tope <- switch(tipo,
+                 exp  = N - h,          # necesita t+h
+                 real = N - h - H12,    # necesita t+h+12
+                 gap  = N - h - H12)    # el gap hereda el tope del realizado
+  js <- (p + 1):tope
+  W  <- controles(js)
+  
+  if (VAR_LHS == "inf") {
+    e_h  <- lev_expinf[js + 1 + h]                              # E_t+h (nivel)
+    real <- lev_ipc[js + 1 + h + H12] - lev_ipc[js + 1 + h]     # π realizada 12m fwd
+  } else {  # "tcn"
+    # depreciación esperada a 12m vista desde t+h:
+    #   E[tcn_{t+h+12}] - tcn_{t+h} = exp_cam_{t+h} - tcn_{t+h}
+    e_h  <- lev_expcam[js + 1 + h] - lev_tcn[js + 1 + h]
+    real <- lev_tcn[js + 1 + h + H12] - lev_tcn[js + 1 + h]     # deprec. realizada 12m fwd
+  }
+  
+  lhs <- switch(tipo, exp = e_h, real = real, gap = e_h - real)
+  
+  shock <- u[js]
+  dat   <- data.frame(lhs, shock, W)
+  dat   <- dat[complete.cases(dat), ]
+  
+  fit <- lm(lhs ~ shock + ., data = dat)   # intercepto + shock + controles
+  b   <- coef(fit)["shock"]
+  se  <- nwse(fit, h, "shock")
+  
+  tibble(h = h, tipo = tipo, N = nrow(dat), b = unname(b), se = se)
+}
+
+# ------------------------------------------------------------
+# 2) Estimación para INFLACIÓN
+# ------------------------------------------------------------
+VAR_LHS <- "inf"
+lp8_inf <- bind_rows(
+  map_dfr(0:H, ~ lp8_h(.x, "exp")),
+  map_dfr(0:H, ~ lp8_h(.x, "real")),
+  map_dfr(0:H, ~ lp8_h(.x, "gap"))
+) %>% mutate(variable = "Inflación")
+
+# ------------------------------------------------------------
+# 3) Estimación para TCN
+# ------------------------------------------------------------
+VAR_LHS <- "tcn"
+lp8_tcn <- bind_rows(
+  map_dfr(0:H, ~ lp8_h(.x, "exp")),
+  map_dfr(0:H, ~ lp8_h(.x, "real")),
+  map_dfr(0:H, ~ lp8_h(.x, "gap"))
+) %>% mutate(variable = "TCN")
+
+lp8 <- bind_rows(lp8_inf, lp8_tcn)
+
+# ------------------------------------------------------------
+# 4) Resultados a la consola
+# ------------------------------------------------------------
+etq_tipo <- c(exp = "Expectativa", real = "Realizado 12m fwd", gap = "Gap (exp - real)")
+
+cat("\n=== PUNTO 8: IRF de expectativas vs realizado ===\n")
+lp8 %>%
+  filter(h %in% c(0, 3, 6, 12, 18, 24)) %>%
+  mutate(tipo = etq_tipo[tipo],
+         est  = sprintf("%.3f [%.3f, %.3f]", b, b - z*se, b + z*se)) %>%
+  dplyr::select(variable, h, tipo, est, N) %>%
+  pivot_wider(names_from = tipo, values_from = c(est, N)) %>%
+  print(width = Inf)
+
+cat("\nTest de diferencia expectativa vs realizado (fila gap, |b/se|):\n")
+lp8 %>% filter(tipo == "gap", h %in% c(0, 3, 6, 12, 18, 24)) %>%
+  transmute(variable, h, gap = round(b, 3), t = round(b/se, 2)) %>%
+  print()
+
+# ------------------------------------------------------------
+# 5) Gráfico: expectativa vs realizado, por variable
+# ------------------------------------------------------------
+df8 <- lp8 %>%
+  filter(tipo %in% c("exp", "real")) %>%
+  transmute(h, variable,
+            tipo = factor(etq_tipo[tipo], levels = c("Expectativa", "Realizado 12m fwd")),
+            est = b, lo = b - z*se, hi = b + z*se)
+
+g8 <- ggplot(df8, aes(h, est, color = tipo, fill = tipo)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+  geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.15, color = NA) +
+  geom_line(linewidth = 0.9) +
+  facet_wrap(~ variable, scales = "free_y") +
+  scale_x_continuous(breaks = seq(0, H, 6)) +
+  scale_color_manual(values = c("Expectativa" = "firebrick", "Realizado 12m fwd" = "steelblue4")) +
+  scale_fill_manual(values  = c("Expectativa" = "firebrick", "Realizado 12m fwd" = "steelblue")) +
+  labs(x = "Meses desde el shock", y = "Respuesta (puntos log a 12m)",
+       color = NULL, fill = NULL) +
+  tema_paper + theme(legend.position = "bottom")
+
+print(g8)
+guardar_graf(g8, "p8_expectativas", width = 11, height = 4.2)
+
+# ------------------------------------------------------------
+# 6) Tablas para el informe (una por variable)
+# ------------------------------------------------------------
+tabla_p8 <- function(lp_df) {
+  lp_df %>%
+    filter(h %in% c(0, 3, 6, 12, 18, 24)) %>%
+    mutate(txt = sprintf("%.3f [%.3f, %.3f]", b, b - z*se, b + z*se)) %>%
+    dplyr::select(h, tipo, txt) %>%
+    pivot_wider(names_from = tipo, values_from = txt) %>%
+    dplyr::select(h, exp, real, gap)
+}
+
+t8_inf <- tabla_p8(lp8_inf)
+t8_tcn <- tabla_p8(lp8_tcn)
+
+print(t8_inf)
+print(t8_tcn)
+
+# --- Tabla 1: INFLACIÓN ---
+t8_inf %>%
+  kbl(booktabs = TRUE, format = "latex", align = "cccc",
+      col.names = c("$h$", "Expectativa",
+                    "Realizado 12m fwd", "Gap (exp $-$ real)"),
+      caption = "Respuesta de expectativas de inflación al shock cambiario",
+      label = "p8_inf", escape = FALSE) %>%
+  kable_styling(latex_options = "hold_position") %>%
+  footnote(
+    general = paste0(
+      "Coeficiente $\\beta_h$ de la LP con el shock cambiario $\\hat u_t$ del ",
+      "VAR bivariado (Secci\\'on 3) como regresor; controles: rezagos del VAR. ",
+      "\\emph{Expectativa}: respuesta de $\\pi^{e,12}_{t+h}$ (nivel). ",
+      "\\emph{Realizado 12m fwd}: respuesta de $IPC_{t+h+12}-IPC_{t+h}$, ",
+      "la inflaci\\'on efectivamente realizada en los 12 meses posteriores a $t+h$, ",
+      "comparable con la expectativa. \\emph{Gap}: diferencia entre ambas; su ",
+      "coeficiente es el test directo de igualdad de las dos respuestas. ",
+      "Intervalos al 95\\% con errores de Newey-West y $h+1$ rezagos. ",
+      "Ambas series en puntos log de inflaci\\'on acumulada a 12 meses. Muestra: 2001m12--2025m12."
+    ),
+    escape = FALSE, threeparttable = TRUE
+  ) %>%
+  cat(file = file.path(dir_salida, "tabla_punto8_inflacion.tex"))
+
+# --- Tabla 2: TCN ---
+t8_tcn %>%
+  kbl(booktabs = TRUE, format = "latex", align = "cccc",
+      col.names = c("$h$", "Expectativa",
+                    "Realizado 12m fwd", "Gap (exp $-$ real)"),
+      caption = "Respuesta de expectativas de tipo de cambio al shock cambiario",
+      label = "p8_tcn", escape = FALSE) %>%
+  kable_styling(latex_options = "hold_position") %>%
+  footnote(
+    general = paste0(
+      "Coeficiente $\\beta_h$ de la LP con el shock cambiario $\\hat u_t$ del ",
+      "VAR bivariado (Secci\\'on 3) como regresor; controles: rezagos del VAR. ",
+      "\\emph{Expectativa}: respuesta de la depreciaci\\'on esperada a 12 meses, ",
+      "$E_{t+h}[tcn_{t+h+12}]-tcn_{t+h}$, construida como $\\text{exp\\_cam}_{t+h}-tcn_{t+h}$. ",
+      "\\emph{Realizado 12m fwd}: respuesta de $tcn_{t+h+12}-tcn_{t+h}$, la depreciaci\\'on ",
+      "efectivamente realizada, comparable con la expectativa. \\emph{Gap}: diferencia ",
+      "entre ambas; su coeficiente es el test directo de igualdad. ",
+      "Intervalos al 95\\% con errores de Newey-West y $h+1$ rezagos. ",
+      "Ambas series en puntos log a 12 meses. Muestra: 2001m11--2025m12."
+    ),
+    escape = FALSE, threeparttable = TRUE
+  ) %>%
+  cat(file = file.path(dir_salida, "tabla_punto8_tcn.tex"))
+
+# ------------------------------------------------------------
+# Chequeo: expectativa TCN en h=0, con y sin meses de crisis
+# Confirma que el coef -0.830 está dominado por 2002/2008/2020.
+# ------------------------------------------------------------
+crisis_meses <- c("2002-07","2002-08","2002-09","2002-10",
+                  "2008-09","2008-10","2008-11",
+                  "2015-09",
+                  "2020-03","2020-04")
+
+lp8_tcn_h0_check <- function(excluir_crisis = FALSE) {
+  h <- 0
+  tope <- N - h
+  js <- (p + 1):tope
+  
+  e_h   <- lev_expcam[js + 1 + h] - lev_tcn[js + 1 + h]  # depreciación esperada
+  shock <- u[js]
+  W     <- controles(js)
+  mes   <- format(base$date_m[js + 1 + h], "%Y-%m")
+  
+  dat <- data.frame(lhs = e_h, shock, W, mes)
+  dat <- dat[complete.cases(dat[, c("lhs","shock")]), ]
+  
+  if (excluir_crisis) dat <- dat[!(dat$mes %in% crisis_meses), ]
+  dat$mes <- NULL
+  
+  fit <- lm(lhs ~ shock + ., data = dat)
+  c(coef = unname(coef(fit)["shock"]),
+    se   = nwse(fit, h, "shock"),
+    N    = nrow(dat))
+}
+
+cat("Expectativa TCN, h=0:\n")
+cat("  Muestra completa:  "); print(round(lp8_tcn_h0_check(FALSE), 3))
+cat("  Sin meses crisis:  "); print(round(lp8_tcn_h0_check(TRUE), 3))
+
+# ------------------------------------------------------------
+# ANEXO: robustez del resultado del TCN a la exclusión de crisis
+# Reestima expectativa, realizado y gap del TCN con y sin los meses
+# de crisis, para varios horizontes.
+# ------------------------------------------------------------
+crisis_meses <- c("2002-07","2002-08","2002-09","2002-10",
+                  "2008-09","2008-10","2008-11",
+                  "2015-09",
+                  "2020-03","2020-04")
+
+lp8_tcn_robust <- function(h, tipo, excluir_crisis = FALSE) {
+  tope <- switch(tipo, exp = N - h, real = N - h - H12, gap = N - h - H12)
+  js <- (p + 1):tope
+  
+  e_h  <- lev_expcam[js + 1 + h] - lev_tcn[js + 1 + h]
+  real <- lev_tcn[js + 1 + h + H12] - lev_tcn[js + 1 + h]
+  lhs  <- switch(tipo, exp = e_h, real = real, gap = e_h - real)
+  
+  shock <- u[js]
+  W     <- controles(js)
+  mes   <- format(base$date_m[js + 1 + h], "%Y-%m")
+  
+  dat <- data.frame(lhs, shock, W, mes)
+  dat <- dat[complete.cases(dat[, c("lhs","shock")]), ]
+  if (excluir_crisis) dat <- dat[!(dat$mes %in% crisis_meses), ]
+  dat$mes <- NULL
+  
+  fit <- lm(lhs ~ shock + ., data = dat)
+  tibble(h = h, tipo = tipo,
+         muestra = if (excluir_crisis) "Sin crisis" else "Completa",
+         b = unname(coef(fit)["shock"]),
+         se = nwse(fit, h, "shock"),
+         N = nrow(dat))
+}
+
+hs <- c(0, 3, 6, 12, 18, 24)
+rob8 <- bind_rows(
+  map_dfr(hs, ~ lp8_tcn_robust(.x, "exp",  FALSE)),
+  map_dfr(hs, ~ lp8_tcn_robust(.x, "exp",  TRUE)),
+  map_dfr(hs, ~ lp8_tcn_robust(.x, "gap",  FALSE)),
+  map_dfr(hs, ~ lp8_tcn_robust(.x, "gap",  TRUE))
+)
+
+cat("\n=== ANEXO: robustez TCN (con/sin crisis) ===\n")
+rob8 %>%
+  mutate(est = sprintf("%.3f [%.3f, %.3f]", b, b - z*se, b + z*se)) %>%
+  dplyr::select(tipo, h, muestra, est, N) %>%
+  pivot_wider(names_from = muestra, values_from = c(est, N)) %>%
+  arrange(tipo, h) %>%
+  print(width = Inf)
+
+hs <- c(0, 3, 6, 12, 18, 24)
+rob8 <- bind_rows(
+  map_dfr(hs, ~ lp8_tcn_robust(.x, "exp",  FALSE)),
+  map_dfr(hs, ~ lp8_tcn_robust(.x, "exp",  TRUE)),
+  map_dfr(hs, ~ lp8_tcn_robust(.x, "real", FALSE)),
+  map_dfr(hs, ~ lp8_tcn_robust(.x, "real", TRUE)),
+  map_dfr(hs, ~ lp8_tcn_robust(.x, "gap",  FALSE)),
+  map_dfr(hs, ~ lp8_tcn_robust(.x, "gap",  TRUE))
+)
+
+cat("\n=== ANEXO: robustez TCN (con/sin crisis) ===\n")
+rob8 %>%
+  mutate(est = sprintf("%.3f [%.3f, %.3f]", b, b - z*se, b + z*se)) %>%
+  dplyr::select(tipo, h, muestra, est, N) %>%
+  pivot_wider(names_from = muestra, values_from = c(est, N)) %>%
+  arrange(factor(tipo, levels = c("exp","real","gap")), h) %>%
+  print(width = Inf)
+
+# ============================================================
+# PUNTO 9 (v2)
+# ERPT ESPERADO vs ESTIMADO — escalares "a 12 meses desde el impacto"
+#
+# Dos cocientes comparables, ambos por IV con el shock û_t:
+#
+#   ESPERADO:  π^e,12_t  ~  (exp_cam_t - tcn_t)        | û_t
+#              (inflación esperada / deprec. esperada, en t)
+#
+#   ESTIMADO:  (IPC_{t+12}-IPC_{t-1}) ~ (tcn_{t+12}-tcn_{t-1}) | û_t
+#              (inflación realizada / deprec. realizada, acumuladas
+#               desde el shock; el denominador arranca en t-1, por eso
+#               el shock lo identifica bien)
+#
+# Ambos son "traspaso a 12m desde el impacto": mismo instrumento,
+# misma ventana, uno esperado y otro realizado.
+#
+# Requiere: u, N, p, H12(=12), base, controles(), nwse, z,
+#           lev_ipc, lev_tcn, lev_expinf, lev_expcam, AER::ivreg.
+# ============================================================
+library(AER)
+
+erpt9 <- function(tipo) {
+  # tipo: "esp" (esperado, en t) | "est" (realizado, acumulado t-1..t+12)
+  
+  if (tipo == "esp") {
+    tope <- N            # solo usa info de t
+    js   <- (p + 1):tope
+    y_num <- lev_expinf[js + 1]                      # π esperada a 12m, en t
+    y_den <- lev_expcam[js + 1] - lev_tcn[js + 1]    # deprec. esperada a 12m, en t
+  } else {  # "est"
+    tope <- N - H12      # necesita t+12
+    js   <- (p + 1):tope
+    y_num <- lev_ipc[js + 1 + H12] - lev_ipc[js]     # IPC_{t+12} - IPC_{t-1}
+    y_den <- lev_tcn[js + 1 + H12] - lev_tcn[js]     # tcn_{t+12} - tcn_{t-1}
+  }
+  
+  shock <- u[js]
+  W  <- controles(js)
+  dat <- data.frame(y_num, y_den, shock, W)
+  dat <- dat[complete.cases(dat), ]
+  
+  ctrl_names <- setdiff(names(dat), c("y_num", "y_den", "shock"))
+  ctrl_str   <- paste(ctrl_names, collapse = " + ")
+  
+  # IV exactamente identificado
+  form <- as.formula(paste0("y_num ~ y_den + ", ctrl_str,
+                            " | shock + ", ctrl_str))
+  iv <- ivreg(form, data = dat)
+  
+  # F de primera etapa (relevancia del shock sobre el denominador)
+  d1 <- dat[, c("y_den", "shock", ctrl_names)]
+  f1 <- lm(as.formula(paste0("y_den ~ shock + ", ctrl_str)), data = d1)
+  f0 <- lm(as.formula(paste0("y_den ~ ", ctrl_str)), data = d1)
+  F1 <- anova(f0, f1)$F[2]
+  
+  # SE: para el estimado (ventanas de 12m acumuladas se superponen) usamos
+  # Newey-West con 12 rezagos; el esperado es un cross-section en t (sin
+  # solapamiento por horizonte), pero usamos NW con pocos rezagos por
+  # prudencia ante autocorrelación residual.
+  lags_nw <- if (tipo == "est") H12 else 1
+  se <- nwse(iv, lags_nw - 1, "y_den")   # nwse usa hh+1 rezagos internamente
+  
+  tibble(tipo = tipo, N = nrow(dat),
+         erpt = unname(coef(iv)["y_den"]), se = se, F1 = F1)
+}
+
+erpt_esp <- erpt9("esp")
+erpt_est <- erpt9("est")
+
+res9 <- bind_rows(erpt_est, erpt_esp) %>%
+  mutate(etq = c("ERPT estimado (realizado 12m)", "ERPT esperado (12m)"))
+
+cat("\n=== PUNTO 9: ERPT a 12 meses desde el impacto ===\n")
+res9 %>%
+  transmute(etq, N,
+            ERPT = sprintf("%.3f", erpt),
+            IC   = sprintf("[%.3f, %.3f]", erpt - z*se, erpt + z*se),
+            F1   = round(F1, 1)) %>%
+  print()
+
+# Diferencia (sesgo de percepción): estimado - esperado
+dif <- erpt_est$erpt - erpt_esp$erpt
+cat(sprintf("\nSesgo de percepción (estimado - esperado): %.3f\n", dif))
+cat("(positivo = el mercado subestima el traspaso)\n")
+
