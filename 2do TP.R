@@ -1349,26 +1349,32 @@ print(lp7 %>% filter(h == 12) %>%
                   erpt_neg = round(erpt_neg, 3), F_neg = round(F_neg, 1)))
 
 # --- Gráfico (escala fija; sólo el shock cambiario retiene señal) ---
+# Se omiten Fed y petróleo por consistencia con la figura del punto 6
+# (shocks_id se define allí). La tabla sigue reportando los 6 shocks.
+
+shocks_id <- c("ebp", "ctot", "embi", "tcn")
+
 df7 <- bind_rows(
-  lp7 %>% transmute(h, shock = factor(lab_shock[shock], levels = lab_shock), signo = "Positivo",
+  lp7 %>% transmute(h, shock, signo = "Positivo",
                     est = erpt_pos, lo = erpt_pos - z*se_pos, hi = erpt_pos + z*se_pos),
-  lp7 %>% transmute(h, shock = factor(lab_shock[shock], levels = lab_shock), signo = "Negativo",
-                    est = erpt_neg, lo = erpt_neg - z*se_neg, hi = erpt_neg + z*se_neg))
+  lp7 %>% transmute(h, shock, signo = "Negativo",
+                    est = erpt_neg, lo = erpt_neg - z*se_neg, hi = erpt_neg + z*se_neg)) %>%
+  filter(shock %in% shocks_id) %>%
+  mutate(shock = factor(lab_shock[shock], levels = lab_shock[shocks_id]))
+
 g7 <- ggplot(df7, aes(h, est, color = signo, fill = signo)) +
   geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
   geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.12, color = NA) +
   geom_line(linewidth = 0.85) +
-  facet_wrap(~ shock, ncol = 3) + scale_x_continuous(breaks = seq(0, H, 6)) +
+  facet_wrap(~ shock, ncol = 2) + scale_x_continuous(breaks = seq(0, H, 6)) +
   coord_cartesian(ylim = c(-0.75, 1)) +
   scale_color_manual(values = c("Positivo" = "firebrick", "Negativo" = "steelblue4")) +
   scale_fill_manual(values  = c("Positivo" = "firebrick", "Negativo" = "steelblue4")) +
-  labs(x = "Meses desde el shock", y = "ERPT", color = NULL, fill = NULL,
-       title = "ERPT por signo del shock, para cada shock estructural",
-       subtitle = "Escala fija; salvo el shock cambiario, la primera etapa débil (F<10) hace estallar las bandas") +
+  labs(x = "Meses desde el shock", y = "ERPT", color = NULL, fill = NULL) +
   tema_paper + theme(legend.position = "bottom")
 
 print(g7)
-guardar_graf(g7, "p7_erpt_signo", width = 11, height = 6)
+guardar_graf(g7, "p7_erpt_signo", width = 8.5, height = 6)
 
 # --- Tabla para el informe (ERPT por signo a h=12, con F de primera etapa) ---
 tabla_p7 <- lp7 %>%
